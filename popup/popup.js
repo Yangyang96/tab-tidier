@@ -147,40 +147,28 @@ async function tidyAllTabs() {
       }
     }
 
-    // Step 3: Organize tabs by domain into windows
-    // Domains with >5 tabs get their own window
-    // Domains with <=5 tabs stay together in the current window
+    // Step 3: Sort tabs by domain within each window (no cross-window moves)
     const remaining = await getAllTabs();
-    const grouped = groupTabsByDomain(remaining);
-    const currentWindow = (await chrome.windows.getCurrent()).id;
 
-    const bigDomains = [];
-    const smallDomainTabs = [];
-
-    for (const [, domainTabs] of grouped) {
-      if (domainTabs.length > 5) {
-        bigDomains.push(domainTabs);
-      } else {
-        smallDomainTabs.push(...domainTabs);
+    // Group by window first, then sort by domain within each window
+    const byWindow = new Map();
+    for (const tab of remaining) {
+      if (!byWindow.has(tab.windowId)) {
+        byWindow.set(tab.windowId, []);
       }
+      byWindow.get(tab.windowId).push(tab);
     }
 
-    // Move small-domain tabs into the current window
-    for (const tab of smallDomainTabs) {
-      if (tab.windowId !== currentWindow) {
-        await chrome.tabs.move(tab.id, { windowId: currentWindow, index: -1 });
-      }
-    }
+    for (const [, windowTabs] of byWindow) {
+      // Sort: pinned tabs stay in place, others sorted by domain
+      const pinned = windowTabs.filter((t) => t.pinned);
+      const unpinned = windowTabs.filter((t) => !t.pinned);
 
-    // Give each big domain its own window
-    for (const domainTabs of bigDomains) {
-      // Check if already all in one window
-      const windowIds = new Set(domainTabs.map((t) => t.windowId));
-      if (windowIds.size === 1 && !windowIds.has(currentWindow)) continue;
+      unpinned.sort((a, b) => getDomain(a.url).localeCompare(getDomain(b.url)));
 
-      const newWindow = await chrome.windows.create({ tabId: domainTabs[0].id });
-      for (const tab of domainTabs.slice(1)) {
-        await chrome.tabs.move(tab.id, { windowId: newWindow.id, index: -1 });
+      const startIndex = pinned.length;
+      for (let i = 0; i < unpinned.length; i++) {
+        await chrome.tabs.move(unpinned[i].id, { index: startIndex + i });
       }
     }
 
