@@ -138,25 +138,37 @@ async function tidyAllTabs() {
       await chrome.tabs.remove(toClose);
     }
 
-    // Step 2: Group remaining tabs by domain
+    // Step 2: Organize tabs — one window per domain
     const remaining = await getAllTabs();
     const grouped = groupTabsByDomain(remaining);
 
-    // Assign domain colors in rotation
-    const colors = ['blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange', 'grey'];
-    let colorIdx = 0;
+    // Skip if only one domain (already tidy)
+    if (grouped.size > 1) {
+      let isFirstDomain = true;
 
-    for (const [domain, domainTabs] of grouped) {
-      if (domainTabs.length < 1) continue;
+      for (const [, domainTabs] of grouped) {
+        if (domainTabs.length < 1) continue;
 
-      const tabIds = domainTabs.map((t) => t.id);
-      const groupId = await chrome.tabs.group({ tabIds });
-      await chrome.tabGroups.update(groupId, {
-        title: domain,
-        collapsed: domainTabs.length > 3,
-        color: colors[colorIdx % colors.length],
-      });
-      colorIdx++;
+        if (isFirstDomain) {
+          // Keep the first domain in the current window, just gather its tabs
+          isFirstDomain = false;
+          const targetWindowId = domainTabs[0].windowId;
+          for (const tab of domainTabs.slice(1)) {
+            if (tab.windowId !== targetWindowId) {
+              await chrome.tabs.move(tab.id, { windowId: targetWindowId, index: -1 });
+            }
+          }
+          continue;
+        }
+
+        // Create a new window with the first tab of this domain
+        const newWindow = await chrome.windows.create({ tabId: domainTabs[0].id });
+
+        // Move the rest of this domain's tabs into the new window
+        for (const tab of domainTabs.slice(1)) {
+          await chrome.tabs.move(tab.id, { windowId: newWindow.id, index: -1 });
+        }
+      }
     }
 
     // Success feedback
