@@ -138,36 +138,49 @@ async function tidyAllTabs() {
       await chrome.tabs.remove(toClose);
     }
 
-    // Step 2: Organize tabs — one window per domain
+    // Step 2: Ungroup all existing tab groups
+    const allGroups = await chrome.tabGroups.query({});
+    for (const group of allGroups) {
+      const groupedTabs = await chrome.tabs.query({ groupId: group.id });
+      for (const tab of groupedTabs) {
+        await chrome.tabs.ungroup(tab.id);
+      }
+    }
+
+    // Step 3: Organize tabs by domain into windows
+    // Domains with >5 tabs get their own window
+    // Domains with <=5 tabs stay together in the current window
     const remaining = await getAllTabs();
     const grouped = groupTabsByDomain(remaining);
+    const currentWindow = (await chrome.windows.getCurrent()).id;
 
-    // Skip if only one domain (already tidy)
-    if (grouped.size > 1) {
-      let isFirstDomain = true;
+    const bigDomains = [];
+    const smallDomainTabs = [];
 
-      for (const [, domainTabs] of grouped) {
-        if (domainTabs.length < 1) continue;
+    for (const [, domainTabs] of grouped) {
+      if (domainTabs.length > 5) {
+        bigDomains.push(domainTabs);
+      } else {
+        smallDomainTabs.push(...domainTabs);
+      }
+    }
 
-        if (isFirstDomain) {
-          // Keep the first domain in the current window, just gather its tabs
-          isFirstDomain = false;
-          const targetWindowId = domainTabs[0].windowId;
-          for (const tab of domainTabs.slice(1)) {
-            if (tab.windowId !== targetWindowId) {
-              await chrome.tabs.move(tab.id, { windowId: targetWindowId, index: -1 });
-            }
-          }
-          continue;
-        }
+    // Move small-domain tabs into the current window
+    for (const tab of smallDomainTabs) {
+      if (tab.windowId !== currentWindow) {
+        await chrome.tabs.move(tab.id, { windowId: currentWindow, index: -1 });
+      }
+    }
 
-        // Create a new window with the first tab of this domain
-        const newWindow = await chrome.windows.create({ tabId: domainTabs[0].id });
+    // Give each big domain its own window
+    for (const domainTabs of bigDomains) {
+      // Check if already all in one window
+      const windowIds = new Set(domainTabs.map((t) => t.windowId));
+      if (windowIds.size === 1 && !windowIds.has(currentWindow)) continue;
 
-        // Move the rest of this domain's tabs into the new window
-        for (const tab of domainTabs.slice(1)) {
-          await chrome.tabs.move(tab.id, { windowId: newWindow.id, index: -1 });
-        }
+      const newWindow = await chrome.windows.create({ tabId: domainTabs[0].id });
+      for (const tab of domainTabs.slice(1)) {
+        await chrome.tabs.move(tab.id, { windowId: newWindow.id, index: -1 });
       }
     }
 

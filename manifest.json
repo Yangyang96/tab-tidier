@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "description": "One-click tab cleanup: deduplicate and organize tabs by domain.",
   "permissions": [
-    "tabs"
+    "tabs",
+    "tabGroups"
   ],
   "action": {
     "default_popup": "popup/popup.html",
