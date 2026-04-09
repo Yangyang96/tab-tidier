@@ -108,12 +108,19 @@ async function renderTabList() {
         <img class="favicon" src="${escapeHtml(favicon)}" alt="">
         <span class="title" title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</span>
         ${isDupe ? '<span class="duplicate-badge">dupe</span>' : ''}
+        <span class="close-btn" title="Close tab">\u00d7</span>
       `;
 
-      itemEl.addEventListener('click', () => {
+      itemEl.querySelector('.title').addEventListener('click', () => {
         chrome.tabs.update(tab.id, { active: true });
         chrome.windows.update(tab.windowId, { focused: true });
         window.close();
+      });
+
+      itemEl.querySelector('.close-btn').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await chrome.tabs.remove(tab.id);
+        await renderTabList();
       });
 
       tabsContainer.appendChild(itemEl);
