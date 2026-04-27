@@ -59,6 +59,26 @@ function countDuplicates(tabs) {
   return findDuplicates(tabs).length;
 }
 
+async function updateStats() {
+  const tabs = await getAllTabs();
+  const dupeCount = countDuplicates(tabs);
+  document.getElementById('stats').textContent =
+    `${tabs.length} tabs \u00b7 ${dupeCount} duplicate${dupeCount !== 1 ? 's' : ''}`;
+}
+
+function removeTabFromDom(tabItemEl) {
+  const tabsContainer = tabItemEl.parentElement;
+  const groupEl = tabsContainer.parentElement;
+  tabItemEl.remove();
+
+  if (tabsContainer.children.length === 0) {
+    groupEl.remove();
+  } else {
+    const countEl = groupEl.querySelector('.domain-header .count');
+    countEl.textContent = `(${tabsContainer.children.length})`;
+  }
+}
+
 async function renderTabList() {
   const tabs = await getAllTabs();
   const dupeCount = countDuplicates(tabs);
@@ -86,20 +106,36 @@ async function renderTabList() {
       <span class="arrow">\u25BC</span>
       <span class="domain-name">${escapeHtml(domain)}</span>
       <span class="count">(${domainTabs.length})</span>
+      <span class="domain-close-btn" title="Close all ${escapeHtml(domain)} tabs">\u00d7</span>
     `;
 
     const tabsContainer = document.createElement('div');
     tabsContainer.className = 'domain-tabs';
 
-    headerEl.addEventListener('click', () => {
+    headerEl.addEventListener('click', (e) => {
+      if (e.target.closest('.domain-close-btn')) return;
       const arrow = headerEl.querySelector('.arrow');
       arrow.classList.toggle('collapsed');
       tabsContainer.classList.toggle('collapsed');
     });
 
+    headerEl.querySelector('.domain-close-btn').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const remainingItems = tabsContainer.querySelectorAll('.tab-item');
+      const tabIds = [...remainingItems].map((el) => Number(el.dataset.tabId));
+      try {
+        await chrome.tabs.remove(tabIds);
+      } catch (err) {
+        console.error('Error closing domain tabs:', err);
+      }
+      groupEl.remove();
+      await updateStats();
+    });
+
     for (const tab of domainTabs) {
       const itemEl = document.createElement('div');
       itemEl.className = 'tab-item';
+      itemEl.dataset.tabId = tab.id;
 
       const isDupe = urlCounts.get(tab.url) > 1;
       const favicon = tab.favIconUrl || `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
@@ -120,7 +156,8 @@ async function renderTabList() {
       itemEl.querySelector('.close-btn').addEventListener('click', async (e) => {
         e.stopPropagation();
         await chrome.tabs.remove(tab.id);
-        await renderTabList();
+        removeTabFromDom(itemEl);
+        await updateStats();
       });
 
       tabsContainer.appendChild(itemEl);

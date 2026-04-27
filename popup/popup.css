@@ -93,6 +93,29 @@ body {
   font-weight: 400;
 }
 
+.domain-header .domain-close-btn {
+  margin-left: auto;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #999;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s;
+}
+
+.domain-header:hover .domain-close-btn {
+  opacity: 1;
+}
+
+.domain-header .domain-close-btn:hover {
+  color: #dc2626;
+  background: #fef2f2;
+}
+
 .domain-tabs {
   overflow: hidden;
 }
