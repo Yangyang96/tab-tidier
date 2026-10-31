@@ -9,9 +9,12 @@
 <body>
   <div class="container">
     <button id="tidy-btn" class="tidy-btn">Tidy All Tabs</button>
-    <div id="stats" class="stats"></div>
+    <div id="stats" class="stats" aria-live="polite"></div>
+    <input id="search" type="search" placeholder="Search titles or URLs" aria-label="Search tabs">
+    <div id="status" class="status" role="status"></div>
     <div id="tab-list" class="tab-list"></div>
   </div>
+  <script src="tab-utils.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

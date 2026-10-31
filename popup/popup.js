@@ -1,242 +1,192 @@
+let busy = false;
+let listedTabs = [];
+
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
-  await renderTabList();
   document.getElementById('tidy-btn').addEventListener('click', tidyAllTabs);
+  document.getElementById('search').addEventListener('input', filterTabs);
+  await runAction(renderTabList);
 }
 
-async function getAllTabs() {
-  return chrome.tabs.query({});
+function element(tag, className, text) {
+  const el = document.createElement(tag);
+  el.className = className;
+  if (text !== undefined) el.textContent = text;
+  return el;
 }
 
-function getDomain(url) {
+function button(className, text, title, onClick) {
+  const el = element('button', className, text);
+  el.type = 'button';
+  el.title = title;
+  el.setAttribute('aria-label', title);
+  el.addEventListener('click', event => {
+    event.stopPropagation();
+    void runAction(onClick);
+  });
+  return el;
+}
+
+function setStatus(message) {
+  document.getElementById('status').textContent = message;
+}
+
+async function runAction(action) {
+  if (busy) return;
+  busy = true;
+  setStatus('');
+  document.body.setAttribute('aria-busy', 'true');
+  document.getElementById('tidy-btn').disabled = true;
   try {
-    return new URL(url).hostname;
+    await action();
   } catch {
-    return 'other';
+    setStatus('Operation incomplete. Reopen to refresh, then try again.');
+  } finally {
+    busy = false;
+    document.body.setAttribute('aria-busy', 'false');
+    document.getElementById('tidy-btn').disabled = false;
   }
 }
 
-function groupTabsByDomain(tabs) {
-  const groups = new Map();
-  for (const tab of tabs) {
-    const domain = getDomain(tab.url);
-    if (!groups.has(domain)) {
-      groups.set(domain, []);
-    }
-    groups.get(domain).push(tab);
-  }
-  // Sort by tab count descending
-  return new Map([...groups.entries()].sort((a, b) => b[1].length - a[1].length));
-}
-
-function findDuplicates(tabs) {
-  const urlMap = new Map();
-  for (const tab of tabs) {
-    if (!urlMap.has(tab.url)) {
-      urlMap.set(tab.url, []);
-    }
-    urlMap.get(tab.url).push(tab);
-  }
-
-  const toClose = [];
-  for (const [, group] of urlMap) {
-    if (group.length <= 1) continue;
-
-    const activeTab = group.find((t) => t.active);
-    const keepTab = activeTab || group.reduce((oldest, t) => (t.id < oldest.id ? t : oldest));
-
-    for (const tab of group) {
-      if (tab.id !== keepTab.id && !tab.pinned) {
-        toClose.push(tab.id);
-      }
-    }
-  }
-  return toClose;
-}
-
-function countDuplicates(tabs) {
-  return findDuplicates(tabs).length;
-}
-
-async function updateStats() {
-  const tabs = await getAllTabs();
-  const dupeCount = countDuplicates(tabs);
+function updateStats(tabs) {
+  const duplicates = new Set(findDuplicates(tabs));
   document.getElementById('stats').textContent =
-    `${tabs.length} tabs \u00b7 ${dupeCount} duplicate${dupeCount !== 1 ? 's' : ''}`;
+    `${tabs.length} tabs · ${duplicates.size} removable duplicates`;
+  for (const item of document.querySelectorAll('.tab-item')) {
+    item.querySelector('.duplicate-badge').hidden = !duplicates.has(Number(item.dataset.tabId));
+  }
 }
 
-function removeTabFromDom(tabItemEl) {
-  const tabsContainer = tabItemEl.parentElement;
-  const groupEl = tabsContainer.parentElement;
-  tabItemEl.remove();
-
-  if (tabsContainer.children.length === 0) {
-    groupEl.remove();
-  } else {
-    const countEl = groupEl.querySelector('.domain-header .count');
-    countEl.textContent = `(${tabsContainer.children.length})`;
+async function reconcileList() {
+  listedTabs = await chrome.tabs.query({});
+  const liveIds = new Set(listedTabs.map(tab => tab.id));
+  for (const item of document.querySelectorAll('.tab-item')) {
+    if (!liveIds.has(Number(item.dataset.tabId))) item.remove();
   }
+  for (const group of document.querySelectorAll('.domain-group')) {
+    const count = group.querySelectorAll('.tab-item').length;
+    if (!count) group.remove();
+    else group.querySelector('.count').textContent = `(${count})`;
+  }
+  updateStats(listedTabs);
+  filterTabs();
+}
+
+async function closeTabs(ids) {
+  // Per-tab results prevent one stale ID from hiding tabs that did not close.
+  const results = await Promise.allSettled(ids.map(id => chrome.tabs.remove(id)));
+  await reconcileList();
+  const liveIds = new Set(listedTabs.map(tab => tab.id));
+  if (results.some((result, index) => result.status === 'rejected' && liveIds.has(ids[index]))) {
+    throw new Error('Some tabs could not be closed');
+  }
+}
+
+async function closeDomain(tabsContainer, domain) {
+  const shown = new Set([...tabsContainer.querySelectorAll('.tab-item')]
+    .map(item => Number(item.dataset.tabId)));
+  const current = await chrome.tabs.query({});
+  const ids = current.filter(tab => shown.has(tab.id) && !tab.pinned &&
+    getDomain(tab.url) === domain).map(tab => tab.id);
+  if (!ids.length) return;
+  if (!window.confirm(`Close ${ids.length} tabs from ${domain}? Pinned tabs stay open.`)) return;
+  await closeTabs(ids);
+}
+
+function createTabItem(tab) {
+  const item = element('div', 'tab-item');
+  item.dataset.tabId = tab.id;
+  // Only packaged assets: even favIconUrl may point to a remote tracking URL.
+  const icon = element('img', 'favicon');
+  icon.src = '../icons/icon-16.png';
+  icon.alt = '';
+  const title = button('title', tab.title || tab.url || 'Untitled tab',
+    tab.title || 'Switch to tab', async () => {
+      await chrome.tabs.update(tab.id, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+      window.close();
+    });
+  const badge = element('span', 'duplicate-badge', 'dupe');
+  badge.hidden = true;
+  const close = button('close-btn', '×', tab.pinned ? 'Pinned tab' : 'Close tab', async () => {
+    const current = await chrome.tabs.get(tab.id);
+    if (!current.pinned) await closeTabs([tab.id]);
+  });
+  close.disabled = Boolean(tab.pinned);
+  item.append(icon, title, badge, close);
+  return item;
 }
 
 async function renderTabList() {
-  const tabs = await getAllTabs();
-  const dupeCount = countDuplicates(tabs);
-  const grouped = groupTabsByDomain(tabs);
-
-  // Build duplicate URL set for badges
-  const urlCounts = new Map();
-  for (const tab of tabs) {
-    urlCounts.set(tab.url, (urlCounts.get(tab.url) || 0) + 1);
+  listedTabs = await chrome.tabs.query({});
+  const list = document.getElementById('tab-list');
+  list.replaceChildren();
+  for (const [domain, tabs] of groupTabsByDomain(listedTabs)) {
+    const group = element('section', 'domain-group');
+    const header = element('div', 'domain-header');
+    const container = element('div', 'domain-tabs');
+    const toggle = button('domain-toggle', '▾', `Toggle ${domain}`, () => {
+      container.classList.toggle('collapsed');
+      toggle.setAttribute('aria-expanded', String(!container.classList.contains('collapsed')));
+      toggle.textContent = container.classList.contains('collapsed') ? '▸' : '▾';
+    });
+    toggle.setAttribute('aria-expanded', 'true');
+    header.append(toggle, element('span', 'domain-name', domain),
+      element('span', 'count', `(${tabs.length})`),
+      button('domain-close-btn', '×', `Close unpinned ${domain} tabs`,
+        () => closeDomain(container, domain)));
+    for (const tab of tabs) container.append(createTabItem(tab));
+    group.append(header, container);
+    list.append(group);
   }
+  updateStats(listedTabs);
+  filterTabs();
+}
 
-  document.getElementById('stats').textContent =
-    `${tabs.length} tabs \u00b7 ${dupeCount} duplicate${dupeCount !== 1 ? 's' : ''}`;
+function filterTabs() {
+  const query = document.getElementById('search').value.trim().toLowerCase();
+  const matches = new Set(listedTabs.filter(tab =>
+    `${tab.title || ''} ${tab.url || ''}`.toLowerCase().includes(query)).map(tab => tab.id));
+  for (const item of document.querySelectorAll('.tab-item')) {
+    item.hidden = !matches.has(Number(item.dataset.tabId));
+  }
+  for (const group of document.querySelectorAll('.domain-group')) {
+    group.hidden = ![...group.querySelectorAll('.tab-item')].some(item => !item.hidden);
+  }
+}
 
-  const listEl = document.getElementById('tab-list');
-  listEl.innerHTML = '';
-
-  for (const [domain, domainTabs] of grouped) {
-    const groupEl = document.createElement('div');
-    groupEl.className = 'domain-group';
-
-    const headerEl = document.createElement('div');
-    headerEl.className = 'domain-header';
-    headerEl.innerHTML = `
-      <span class="arrow">\u25BC</span>
-      <span class="domain-name">${escapeHtml(domain)}</span>
-      <span class="count">(${domainTabs.length})</span>
-      <span class="domain-close-btn" title="Close all ${escapeHtml(domain)} tabs">\u00d7</span>
-    `;
-
-    const tabsContainer = document.createElement('div');
-    tabsContainer.className = 'domain-tabs';
-
-    headerEl.addEventListener('click', (e) => {
-      if (e.target.closest('.domain-close-btn')) return;
-      const arrow = headerEl.querySelector('.arrow');
-      arrow.classList.toggle('collapsed');
-      tabsContainer.classList.toggle('collapsed');
-    });
-
-    headerEl.querySelector('.domain-close-btn').addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const remainingItems = tabsContainer.querySelectorAll('.tab-item');
-      const tabIds = [...remainingItems].map((el) => Number(el.dataset.tabId));
-      try {
-        await chrome.tabs.remove(tabIds);
-      } catch (err) {
-        console.error('Error closing domain tabs:', err);
-      }
-      groupEl.remove();
-      await updateStats();
-    });
-
-    for (const tab of domainTabs) {
-      const itemEl = document.createElement('div');
-      itemEl.className = 'tab-item';
-      itemEl.dataset.tabId = tab.id;
-
-      const isDupe = urlCounts.get(tab.url) > 1;
-      const favicon = tab.favIconUrl || `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
-
-      itemEl.innerHTML = `
-        <img class="favicon" src="${escapeHtml(favicon)}" alt="">
-        <span class="title" title="${escapeHtml(tab.title)}">${escapeHtml(tab.title)}</span>
-        ${isDupe ? '<span class="duplicate-badge">dupe</span>' : ''}
-        <span class="close-btn" title="Close tab">\u00d7</span>
-      `;
-
-      itemEl.querySelector('.title').addEventListener('click', () => {
-        chrome.tabs.update(tab.id, { active: true });
-        chrome.windows.update(tab.windowId, { focused: true });
-        window.close();
+async function sortWindows(tabs) {
+  const windows = new Map();
+  for (const tab of tabs) {
+    if (!windows.has(tab.windowId)) windows.set(tab.windowId, []);
+    windows.get(tab.windowId).push(tab);
+  }
+  for (const windowTabs of windows.values()) {
+    const groupedIds = windowTabs.filter(tab => tab.groupId !== -1 && tab.groupId !== undefined)
+      .map(tab => tab.id);
+    if (groupedIds.length) await chrome.tabs.ungroup(groupedIds);
+    const unpinned = windowTabs.filter(tab => !tab.pinned);
+    const sorted = [...unpinned].sort((a, b) =>
+      getDomain(a.url).localeCompare(getDomain(b.url)) || a.index - b.index);
+    if (sorted.some((tab, index) => tab.id !== unpinned[index].id)) {
+      await chrome.tabs.move(sorted.map(tab => tab.id), {
+        index: windowTabs.length - unpinned.length,
       });
-
-      itemEl.querySelector('.close-btn').addEventListener('click', async (e) => {
-        e.stopPropagation();
-        await chrome.tabs.remove(tab.id);
-        removeTabFromDom(itemEl);
-        await updateStats();
-      });
-
-      tabsContainer.appendChild(itemEl);
     }
-
-    groupEl.appendChild(headerEl);
-    groupEl.appendChild(tabsContainer);
-    listEl.appendChild(groupEl);
   }
 }
 
 async function tidyAllTabs() {
-  const btn = document.getElementById('tidy-btn');
-  btn.textContent = 'Tidying...';
-  btn.disabled = true;
-
-  try {
-    // Step 1: Remove duplicates
-    const tabs = await getAllTabs();
-    const toClose = findDuplicates(tabs);
-    if (toClose.length > 0) {
-      await chrome.tabs.remove(toClose);
-    }
-
-    // Step 2: Ungroup all existing tab groups
-    const allGroups = await chrome.tabGroups.query({});
-    for (const group of allGroups) {
-      const groupedTabs = await chrome.tabs.query({ groupId: group.id });
-      for (const tab of groupedTabs) {
-        await chrome.tabs.ungroup(tab.id);
-      }
-    }
-
-    // Step 3: Sort tabs by domain within each window (no cross-window moves)
-    const remaining = await getAllTabs();
-
-    // Group by window first, then sort by domain within each window
-    const byWindow = new Map();
-    for (const tab of remaining) {
-      if (!byWindow.has(tab.windowId)) {
-        byWindow.set(tab.windowId, []);
-      }
-      byWindow.get(tab.windowId).push(tab);
-    }
-
-    for (const [, windowTabs] of byWindow) {
-      // Sort: pinned tabs stay in place, others sorted by domain
-      const pinned = windowTabs.filter((t) => t.pinned);
-      const unpinned = windowTabs.filter((t) => !t.pinned);
-
-      unpinned.sort((a, b) => getDomain(a.url).localeCompare(getDomain(b.url)));
-
-      const startIndex = pinned.length;
-      for (let i = 0; i < unpinned.length; i++) {
-        await chrome.tabs.move(unpinned[i].id, { index: startIndex + i });
-      }
-    }
-
-    // Success feedback
-    btn.textContent = 'Done!';
-    btn.classList.add('success');
-
-    // Re-render the list
+  await runAction(async () => {
+    const planned = new Set(findDuplicates(await chrome.tabs.query({})));
+    if (!window.confirm(`Close up to ${planned.size} duplicate tabs and sort all windows by domain? ` +
+      'Active, pinned and audible tabs stay open. Existing tab groups will be removed.')) return;
+    // Re-query after confirmation: never close newly protected/navigating tabs.
+    const ids = findDuplicates(await chrome.tabs.query({})).filter(id => planned.has(id));
+    await closeTabs(ids);
+    await sortWindows(await chrome.tabs.query({}));
     await renderTabList();
-
-    setTimeout(() => {
-      btn.textContent = 'Tidy All Tabs';
-      btn.classList.remove('success');
-      btn.disabled = false;
-    }, 1500);
-  } catch (err) {
-    btn.textContent = 'Error — try again';
-    btn.disabled = false;
-    console.error('Tab Tidier error:', err);
-  }
-}
-
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str || '';
-  return div.innerHTML;
+    setStatus('Done. Tabs sorted within each window.');
+  });
 }

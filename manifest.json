@@ -1,11 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Tab Tidier",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "One-click tab cleanup: deduplicate and organize tabs by domain.",
   "permissions": [
-    "tabs",
-    "tabGroups"
+    "tabs"
   ],
   "action": {
     "default_popup": "popup/popup.html",
@@ -22,5 +21,8 @@
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
   }
 }

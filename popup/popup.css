@@ -184,3 +184,17 @@ body {
   color: #dc2626;
   background: #fef2f2;
 }
+
+button { font: inherit; }
+button:focus-visible, input:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+button:disabled { cursor: default; opacity: 0.5; }
+[hidden] { display: none !important; }
+.domain-toggle { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 2px; }
+.domain-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-item .title { border: 0; background: transparent; text-align: left; cursor: pointer; }
+.close-btn, .domain-close-btn { border: 0; background: transparent; cursor: pointer; }
+.tab-item .close-btn, .domain-header .domain-close-btn { opacity: 1; }
+body[aria-busy="true"] .tab-list { pointer-events: none; opacity: 0.7; }
+#search { margin: 0 12px 8px; padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 6px; }
+.status { padding: 0 16px 8px; font-size: 12px; color: #444; }
+.status:empty { display: none; }
